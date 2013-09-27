@@ -8,4 +8,5 @@ class Dashboard(models.Model):
   name = models.CharField(primary_key=True, max_length=128)
   owners = models.ManyToManyField(Profile, related_name='dashboards')
   state = models.TextField()
+  templated = models.BooleanField(default = False)
   __str__ = lambda self: "Dashboard [%s]" % self.name

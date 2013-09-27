@@ -63,6 +63,9 @@
 #STORAGE_DIR = '/opt/graphite/storage'
 #CONTENT_DIR = '/opt/graphite/webapp/content'
 
+# Change METRICS_DIRS to point to the directories for your device metrics
+METRICS_DIRS = [ '/opt/graphite/storage/whisper/CHANGEME' ]
+
 # To further or fully customize the paths, modify the following. Note that the
 # default settings for each of these are relative to CONF_DIR and STORAGE_DIR
 #

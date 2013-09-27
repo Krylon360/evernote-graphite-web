@@ -47,6 +47,7 @@ setup(
     'graphite.browser',
     'graphite.cli',
     'graphite.composer',
+    'graphite.device',
     'graphite.render',
     'graphite.whitelist',
     'graphite.metrics',

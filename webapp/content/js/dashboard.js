@@ -3,16 +3,25 @@ var viewport;
 var contextSelector;
 var contextSelectorFields = [];
 var selectedScheme = null;
+var listView;
 var metricSelector;
 var metricSelectorMode;
 var metricSelectorGrid;
 var metricSelectorTextField;
 var graphArea;
+var templateCheckBox;
+var templateStore;
+var templateComboBox;
+var attributeStore;
 var graphStore;
+var attributesGrid;
 var graphView;
 var navBar;
+var navTabs;
+var serverPanel;
 var dashboardName;
 var dashboardURL;
+var isDashboardTemplated = false;
 var refreshTask;
 var spacer;
 var justClosedGraph = false;
@@ -23,7 +32,7 @@ var cookieProvider = new Ext.state.CookieProvider({
   path: "/dashboard"
 });
 
-var NAV_BAR_REGION = cookieProvider.get('navbar-region') || 'north';
+var NAV_BAR_REGION = cookieProvider.get('navbar-region') || 'west';
 
 var CONFIRM_REMOVE_ALL = cookieProvider.get('confirm-remove-all') != 'false';
 
@@ -32,10 +41,10 @@ var navBarNorthConfig = {
   region: 'north',
   layout: 'hbox',
   layoutConfig: { align: 'stretch' },
-  collapsible: true,
+  collapsible: false,
   collapseMode: 'mini',
   split: true,
-  title: "untitled",
+  title: "Explorer - Completer",
   height: 350,
   listeners: {
     expand: function() { focusCompleter(); } // defined below
@@ -47,7 +56,7 @@ delete navBarWestConfig.height;
 navBarWestConfig.region = 'west';
 navBarWestConfig.layout = 'vbox';
 navBarWestConfig.width = 338;
-
+navBarWestConfig.title = "Explorer - Tree";
 
 // Record types and stores
 var SchemeRecord = Ext.data.Record.create([
@@ -87,7 +96,7 @@ var GraphRecord = new Ext.data.Record.create([
 
 var graphStore;
 function graphStoreUpdated() {
-  if (metricSelectorGrid) metricSelectorGrid.getView().refresh();
+  //if (metricSelectorGrid) metricSelectorGrid.getView().refresh();
 }
 
 graphStore = new Ext.data.ArrayStore({
@@ -668,6 +677,7 @@ function initDashboard () {
   graphArea = new Ext.Panel({
     region: 'center',
     layout: 'fit',
+    header: true,
     autoScroll: false,
     bodyCssClass: 'graph-area-body',
     items: [graphView],
@@ -701,10 +711,287 @@ function initDashboard () {
   var navBarConfig = (NAV_BAR_REGION == 'north') ? navBarNorthConfig : navBarWestConfig;
   navBar = new Ext.Panel(navBarConfig);
 
+  var deviceStore = new Ext.data.JsonStore({
+    url: "/device/find/",
+    method: 'GET',
+    params: {query: "e"},
+    fields: ['name'],
+    root: 'devices',
+    baseParams: {'query': ''}
+  });
+  deviceStore.load();
+
+  function deviceSelected(thisView, selections){
+    if (templateComboBox.getValue().length > 1) {
+       if (listView.getSelectedRecords().length > 0) {
+         sendLoadRequest(templateComboBox.getValue());
+       }
+    } else {
+      Ext.Msg.alert('Unspecified Template','You must select a template before loading a device.');
+    }
+  }
+
+  listView = new Ext.list.ListView({
+    store: deviceStore,
+    autoscroll: 'auto',
+    hidden: false,
+    singleSelect: false,
+    multiSelect: true,
+    emptyText: 'Nothing loaded yet...',
+    reserveScrollOffset: true,
+    columns: [{
+      header: 'Devices',
+      dataIndex: 'name'
+    }],
+    listeners: {
+      selectionchange: deviceSelected,
+    }
+  });
+
+  function deviceFilterKeyPress(thisField, e){
+    var charCode = e.getCharCode();
+    if (charCode == 8 ||  //backspace
+      charCode >= 46 || //delete and all printables
+      charCode == 36 || //home
+      charCode == 35) { //end
+      deviceFilterTask.delay(AUTOCOMPLETE_DELAY);
+    }
+  }
+
+  var deviceFilterTextField = new Ext.form.TextField({
+    id: 'device-filter',
+    hidden: false,
+    fieldLabel: 'Search',
+    emptyText: "<filter devices list>",
+    width: '100%',
+    enableKeyEvents: true,
+    listeners: {
+      keypress: deviceFilterKeyPress,
+      specialkey: deviceFilterKeyPress
+    }
+  });
+
+  templateStore = new Ext.data.JsonStore({
+    url: '/dashboard/find-template/',
+    fields: ['name'],
+    root: 'templates',
+    baseParams: {query: ''},
+    autoLoad: true,
+    listeners: {
+      load: function(thisStore, records, options){
+        try {
+          templateComboBox.setValue(getState().name);
+        } catch(err){}
+      }
+    }
+  });
+
+  function templateSelected(thisBox, record, index){
+    if (listView.getSelectionCount() >= 1) {
+      sendLoadRequest(templateComboBox.getValue())
+    }
+  }
+
+  templateComboBox = new Ext.form.ComboBox({
+    fieldLabel: 'Templates',
+    store: templateStore,
+    mode: 'local',
+    emptyText: '<select a template>',
+    editable: true,
+    typeAhead: true,
+    triggerAction: 'all',
+    displayField: 'name',
+    forceSelection: true,
+    valueField: 'name',
+    listeners: {
+      select: templateSelected
+    }
+  });
+
+
+  var deviceFilterTask = new Ext.util.DelayedTask(function (){
+    var query = deviceFilterTextField.getValue();
+    deviceStore.setBaseParam('query', query);
+    deviceStore.load();
+  });
+
+  var devicePanel = new Ext.form.FormPanel({
+    title: "Devices",
+    collapsible: false,
+    labelAlign: 'left',
+    labelWidth: 80,
+    items: [templateComboBox, deviceFilterTextField, listView],
+    listeners: {
+    resize: function(){
+      try {
+        listView.setHeight(listView.container.getHeight()- 50);
+      } catch(err) {}
+    },
+    afterlayout: function() {
+      try {
+        listView.setHeight(listView.container.getHeight()- 50);
+      } catch(err) {}
+    }
+  }
+  });
+
+  var attributesColumnModel = new Ext.grid.ColumnModel({
+    defaults: {
+      sortable: true
+    },
+    columns: [{
+      id: 'variable',
+      header: 'Variable',
+      dataIndex: 'variable',
+      editor: new Ext.form.TextField({
+      allowBlank: false
+      })
+    }, {
+      id: 'value',
+      header: 'Value',
+      dataIndex: 'value',
+      editor: new Ext.form.TextField({
+      allowBlank: false
+      })
+    }]
+  });
+
+  attributeStore = new Ext.data.ArrayStore({
+    fields: ['variable', 'value'],
+    listeners: {
+      // TODO add listeners for add, remove, update that
+      //      reload the dashboard with the new values
+    }
+  });
+
+  attributesGrid = new Ext.grid.EditorGridPanel({
+    store: attributeStore,
+    cm: attributesColumnModel,
+    disabled: true,
+    width: '100%',
+    height: 250,
+    autoExpandColumn: 'variable',
+    title: 'Attributes',
+    frame: true,
+    clicksToEdit: 2,
+    tbar: [{
+      icon: ADD_ICON,
+      text: 'Add New Variable',
+      handler: function(){
+        var row = attributesGrid.getStore().recordType;
+        var r = new row({variable: '', value: ''});
+        attributesGrid.stopEditing();
+        attributeStore.insert(0,r);
+        attributesGrid.startEditing(0,0);
+      }
+    },{
+      icon: DELETE_ICON,
+      text: 'Delete Selected Variable',
+      handler: function(){
+        try {
+          var selected = attributesGrid.getSelectionModel().selection.record;
+          if (selected.data.variable === '{{id}}') {
+            Ext.Msg.alert('Denied', 'The {{id}} variable is reserved for internal use.');
+          } else {
+            attributeStore.remove(selected);
+          }
+        } catch(err){}
+      }
+    }],
+    buttons: [
+      {text: 'Apply',
+        handler: function(){
+          attributeStore.commitChanges();
+          updateGraphRecords();
+        }
+      },
+      {text: 'Undo Changes',
+        handler: function(){
+          attributeStore.rejectChanges();
+          attributeStore.each(
+            function(record) {
+              if (record.data.variable === '') {
+                // unecessary
+                // attributeStore.remove(record);
+                sendLoadRequest(getState().name);
+              }
+            }
+          )
+        }
+      },
+    ],
+    listeners: {
+      validateedit: function (e) {
+        if (e.column == 0) {
+          if (e.originalValue == '{{id}}') {
+            e.cancel = true;
+            Ext.Msg.alert('Denied', 'The {{id}} variable is reserved for internal use.');
+          }
+          if (e.value.match(/^{{.*}}$/) === null) {
+            e.cancel = true
+            Ext.Msg.alert('Error', 'Variables must be formatted like: {{example}}');
+          }
+          // TODO handle error scenario when a duplicate variable is added
+        }
+      }
+    }
+  });
+
+
+  templateCheckBox = new Ext.form.Checkbox({
+    fieldLabel: 'Templating Enabled ? ',
+    checked: isDashboardTemplated,
+    listeners: {
+      check: function (thisCheckBox, checked) {
+        if (checked) {
+          attributesGrid.enable();
+          isDashboardTemplated = true;
+          refreshGraphs();
+        } else {
+          attributesGrid.disable();
+          isDashboardTemplated = false;
+          refreshGraphs();
+        }
+      }
+    }
+  });
+
+  var editTemplatePanel = new Ext.form.FormPanel({
+    title: "Template Editor",
+    collapsible: false,
+    labelAlign: 'left',
+    labelWidth: 150,
+    items: [templateCheckBox, attributesGrid],
+  });
+
+  if (NAV_BAR_REGION == 'west') {
+    navTabs = new Ext.TabPanel({
+        region: 'west',
+        layoutConfig: { align: 'stretch' },
+        items: [devicePanel, editTemplatePanel, navBar],
+        split: true,
+        width: 338,
+        collapsible: true,
+        collapseMode: 'mini',
+        activeTab: 0
+    });
+  } else {
+    navTabs = new Ext.TabPanel({
+      region: 'north',
+      layoutConfig: { align: 'stretch' },
+      items: [devicePanel, editTemplatePanel, navBar],
+      split: true,
+      height: 350,
+      collapsible: true,
+      collapseMode: 'mini',
+      activeTab: 0
+    });
+  }
+
   viewport = new Ext.Viewport({
     layout: 'border',
     items: [
-      navBar,
+      navTabs,
       graphArea
     ]
   });
@@ -717,7 +1004,7 @@ function initDashboard () {
   // Load initial dashboard state if it was passed in
   if (initialState) {
     applyState(initialState);
-    navBar.collapse();
+    navTabs.collapse();
   }
 
   if(window.location.hash != '')
@@ -968,7 +1255,7 @@ function importGraphUrl(targetUrl, options) {
   if (graphTargetList.length == 0) {
     return;
   }
- 
+
   var graphTargetString = Ext.urlEncode({target: graphTargetList});
   var existingIndex = graphStore.findExact('target', graphTargetString);
 
@@ -993,19 +1280,63 @@ function importGraphUrl(targetUrl, options) {
 }
 
 function updateGraphRecords() {
+  var tokens = [];
+  var tokencount = 0;
+  var idindex = 0;
+  if (isDashboardTemplated === true) {
+    try {
+      attributeStore.each(function(record){
+        tokens.push([new RegExp(record.data.variable,'g'), record.data.value]);
+        if (record.data.variable === '{{id}}') {
+          idindex = tokencount;
+        }
+        tokencount++;
+      });
+    } catch (err) { }
+  }
+
   graphStore.each(function (item, index) {
     var params = {};
+    var backup = {};
     Ext.apply(params, defaultGraphParams);
     Ext.apply(params, item.data.params);
     Ext.apply(params, GraphSize);
     params._uniq = Math.random();
-    if (params.title === undefined && params.target.length == 1) {
-      params.title = params.target[0];
-    }
     if (!params.uniq === undefined) {
         delete params["uniq"];
     }
+
+    // TODO updateGraphRecords is terribly inefficient, fix
+    Ext.apply(backup, params.target);
+    if (isDashboardTemplated === true) {
+      // Update graph with template
+      var graphs = params.target.length;
+      var selections = listView.getSelectedRecords();
+      for (var i=0; i<graphs; i++) {
+        for (var k=1; k<selections.length; k++) {
+          params.target.push(new String(params.target[i]).replace(tokens[idindex][0],
+            selections[k].data['name']));
+        }
+        for (var j=0; j<tokencount; j++) {
+          params.target[i] = params.target[i].replace(tokens[j][0], tokens[j][1]);
+        }
+      }
+      // Update title with template
+      if (params.title) {
+        for (var j=0; j<tokencount; j++) {
+          params.title = params.title.replace(tokens[j][0], tokens[j][1]);
+        }
+      }
+    }
+    if (params.title === undefined && params.target.length == 1) {
+      params.title = params.target[0];
+    }
     item.set('url', '/render?' + Ext.urlEncode(params));
+
+    // clear the array and restore the backup
+    params.target.length = 0;
+    Ext.apply(params.target, backup);
+
     item.set('width', GraphSize.width);
     item.set('height', GraphSize.height);
     item.set('index', index);
@@ -1584,7 +1915,7 @@ function doShare() {
     // Prompt the user to save their dashboard so they are aware only saved changes get shared
     Ext.Msg.show({
       title: "Save Dashboard And Share",
-      msg: "You must save changes to your dashboard in order to share it.",
+      msg: "*WARNING* This will re-save the dashboard overwriting it. Are you absolutely sure? *WARNING*",
       buttons: Ext.Msg.OKCANCEL,
       fn: function (button) {
             if (button == 'ok') {
@@ -1593,7 +1924,6 @@ function doShare() {
             }
           }
     });
-
   }
 }
 
@@ -1917,6 +2247,7 @@ function breakoutGraph(record) {
      functions after the expressions get expanded. */
   var pathExpressions = [];
   var exprInfo = {};
+  var tokens = {};
 
   try {
     Ext.each(record.data.params.target, function(target) {
@@ -1933,16 +2264,24 @@ function breakoutGraph(record) {
               throw 'arrr!';
             }
 
+            oexpr = expr
+            if (isDashboardTemplated === true) {
+              try {
+                attributeStore.each(function(record){
+                  expr = expr.replace(RegExp(record.data.variable,'g'), record.data.value);
+                  tokens[expr] = oexpr;
+                });
+              } catch (err) {}
+            }
             pathExpressions.push(expr);
-            var i = target.indexOf(expr);
+            var i = target.indexOf(oexpr);
             exprInfo[expr] = {
               expr: expr,
               pre: target.substr(0, i),
-              post: target.substr(i + expr.length)
+              post: target.substr(i + oexpr.length)
             }
 
           }
-
         }); //map arglets
       }); //map args
     }); //each target
@@ -1965,6 +2304,9 @@ function breakoutGraph(record) {
                   var pre = exprInfo[expr].pre;
                   var post = exprInfo[expr].post;
                   map(responseObj.results[expr], function (metricPath) {
+                    if (isDashboardTemplated === true) {
+                      metricPath = tokens[metricPath]
+                    }
                     metricPath = pre + metricPath + post;
                     graphAreaToggle(metricPath, {dontRemove: true, defaultParams: record.data.params});
                   });
@@ -2026,7 +2368,7 @@ function mailGraph(record) {
                url: '/dashboard/email',
                waitMsg: 'Processing Request',
                success: function (contactForm, response) {
-         console.log(response.result);
+         // console.log(response.result);
                  win.close();
                }
              });
@@ -2265,6 +2607,7 @@ function editDashboard() {
       graphStore.add([record]);
     }
     edit_dashboard_win.close();
+    refreshGraphs();
   }
   function getInitialState() {
     var graphs = [];
@@ -2295,6 +2638,8 @@ function saveDashboard() {
     "Enter the name to save this dashboard as",
     function (button, text) {
       if (button == 'ok') {
+        text = text.replace('(templated)', '');
+        text = text.replace(/^\s+|\s+$/g, '');
         setDashboardName(text);
         sendSaveRequest(text);
       }
@@ -2310,12 +2655,15 @@ function sendSaveRequest(name) {
     url: "/dashboard/save/" + name,
     method: 'POST',
     params: {
+      templated: isDashboardTemplated,
       state: Ext.encode( getState() )
     },
     success: function (response) {
                var result = Ext.decode(response.responseText);
                if (result.error) {
                  Ext.Msg.alert("Error", "There was an error saving this dashboard: " + result.error);
+               } else {
+                 templateStore.load();
                }
              },
     failure: failedAjaxCall
@@ -2339,6 +2687,7 @@ function sendLoadRequest(name) {
 
 function getState() {
   var graphs = [];
+  var variables = [];
   graphStore.each(
     function (record) {
       graphs.push([
@@ -2349,9 +2698,19 @@ function getState() {
       ]);
     }
   );
+  attributeStore.each(
+    function (record) {
+      variables.push([
+        record.data.variable,
+        record.data.value
+      ]);
+    }
+  );
 
   return {
     name: dashboardName,
+    attributes: variables,
+    templated: isDashboardTemplated,
     timeConfig: TimeRange,
     refreshConfig: {
       enabled: Ext.getCmp('auto-refresh-button').pressed,
@@ -2364,44 +2723,69 @@ function getState() {
 }
 
 function applyState(state) {
+  if (typeof(state) == "string") {
+    state = JSON.parse(state);
+  }
   setDashboardName(state.name);
-
   //state.timeConfig = {type, quantity, units, untilQuantity, untilUnits, startDate, startTime, endDate, endTime}
   var timeConfig = state.timeConfig
-  TimeRange.type = timeConfig.type;
-  TimeRange.relativeStartQuantity = timeConfig.relativeStartQuantity;
-  TimeRange.relativeStartUnits = timeConfig.relativeStartUnits;
-  TimeRange.relativeUntilQuantity = timeConfig.relativeUntilQuantity;
-  TimeRange.relativeUntilUnits = timeConfig.relativeUntilUnits;
-  TimeRange.startDate = new Date(timeConfig.startDate);
-  TimeRange.startTime = timeConfig.startTime;
-  TimeRange.endDate = new Date(timeConfig.endDate);
-  TimeRange.endTime = timeConfig.endTime;
+  if (timeConfig) {
+    TimeRange.type = timeConfig.type;
+    TimeRange.relativeStartQuantity = timeConfig.relativeStartQuantity;
+    TimeRange.relativeStartUnits = timeConfig.relativeStartUnits;
+    TimeRange.relativeUntilQuantity = timeConfig.relativeUntilQuantity;
+    TimeRange.relativeUntilUnits = timeConfig.relativeUntilUnits;
+    TimeRange.startDate = new Date(timeConfig.startDate);
+    TimeRange.startTime = timeConfig.startTime;
+    TimeRange.endDate = new Date(timeConfig.endDate);
+    TimeRange.endTime = timeConfig.endTime;
+  }
   updateTimeText();
-
-
 
   //state.refreshConfig = {enabled, interval}
   var refreshConfig = state.refreshConfig;
-  if (refreshConfig.enabled) {
-    stopTask(refreshTask);
-    startTask(refreshTask);
-    Ext.getCmp('auto-refresh-button').toggle(true);
+  if (refreshConfig) {
+    if (refreshConfig.enabled) {
+      stopTask(refreshTask);
+      startTask(refreshTask);
+      Ext.getCmp('auto-refresh-button').toggle(true);
+    } else {
+      stopTask(refreshTask);
+      Ext.getCmp('auto-refresh-button').toggle(false);
+    }
+    //refreshTask.interval = refreshConfig.interval;
+    updateAutoRefresh(refreshConfig.interval / 1000);
   } else {
-    stopTask(refreshTask);
-    Ext.getCmp('auto-refresh-button').toggle(false);
+      stopTask(refreshTask);
+      Ext.getCmp('auto-refresh-button').toggle(false);
   }
-  //refreshTask.interval = refreshConfig.interval;
-  updateAutoRefresh(refreshConfig.interval / 1000);
 
   //state.graphSize = {width, height}
   var graphSize = state.graphSize;
-  GraphSize.width = graphSize.width;
-  GraphSize.height = graphSize.height;
+  if (graphSize) {
+    GraphSize.width = graphSize.width;
+    GraphSize.height = graphSize.height;
+  }
 
   //state.defaultGraphParams = {...}
   defaultGraphParams = state.defaultGraphParams || originalDefaultGraphParams;
 
+  // templated (true or false)
+  isDashboardTemplated = state.templated || false;
+  templateCheckBox.setValue(isDashboardTemplated);
+  if (state.attributes) {
+    try {
+      var value = listView.getSelectedRecords()[0].data['name'];
+        for (var i=0;i < state.attributes.length;i++) {
+            if (state.attributes[i][0] === '{{id}}') {
+                state.attributes[i][1] = value;
+            }
+        }
+    } catch(err) {}
+    attributeStore.loadData(state.attributes);
+  } else {
+    attributeStore.loadData([['{{id}}',listView.getSelectedRecords()[0].data['name']]]);
+  }
   //state.graphs = [ [id, target, params, url], ... ]
   graphStore.loadData(state.graphs);
 
@@ -2446,7 +2830,9 @@ function setDashboardName(name) {
 
     document.title = name + " - Graphite Dashboard";
     window.location.hash = name;
-    navBar.setTitle(name + " - (" + dashboardURL + ")");
+//    navBar.setTitle(name + " - (" + dashboardURL + ")");
+//    graphArea.setTitle(name + " - (" + dashboardURL + ")");
+    graphArea.setTitle(name);
     saveButton.setText('Save "' + name + '"');
     saveButton.enable();
   }
@@ -2542,7 +2928,8 @@ function showDashboardFinder() {
   function openSelected() {
     var selected = dashboardsList.getSelectedRecords();
     if (selected.length > 0) {
-      sendLoadRequest(selected[0].data.name);
+      sendLoadRequest(selected[0].data.name.replace(' (templated)',''));
+      templateStore.load();
     }
     win.close();
   }
@@ -2558,9 +2945,10 @@ function showDashboardFinder() {
         "Are you sure you want to delete the " + name + " dashboard?",
         function (button) {
           if (button == 'yes') {
-            deleteDashboard(name);
+            deleteDashboard(name.replace(' (templated)',''));
             dashboardsStore.remove(record);
             dashboardsList.refresh();
+            templateStore.load();
           }
         }
       );
@@ -2587,7 +2975,8 @@ function showDashboardFinder() {
 
       dblclick: function (listView, index, node, e) {
                   var record = dashboardsStore.getAt(index);
-                  sendLoadRequest(record.data.name);
+                  sendLoadRequest(record.data.name.replace(' (templated)',''));
+                  templateStore.load();
                   win.close();
                 }
     },

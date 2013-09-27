@@ -139,21 +139,24 @@ def dashboard(request, name=None):
       context['initialError'] = "Dashboard '%s' does not exist." % name
     else:
       context['initialState'] = dashboard.state
-
   return render_to_response("dashboard.html", context)
 
 
 def save(request, name):
   # Deserialize and reserialize as a validation step
   state = str( json.dumps( json.loads( request.POST['state'] ) ) )
+  templated = False
+  if (request.POST['templated'] == 'true'):
+    templated = True
 
   try:
     dashboard = Dashboard.objects.get(name=name)
   except Dashboard.DoesNotExist:
-    dashboard = Dashboard.objects.create(name=name, state=state)
+    dashboard = Dashboard.objects.create(name=name, templated=templated, state=state)
   else:
     dashboard.state = state
-    dashboard.save();
+    dashboard.templated = templated
+    dashboard.save()
 
   return json_response( dict(success=True) )
 
@@ -164,7 +167,9 @@ def load(request, name):
   except Dashboard.DoesNotExist:
     return json_response( dict(error="Dashboard '%s' does not exist. " % name) )
 
-  return json_response( dict(state=json.loads(dashboard.state)) )
+  data = dict(json.loads(dashboard.state))
+  data['templated'] = dashboard.templated
+  return json_response( dict(state=data) )
 
 
 def delete(request, name):
@@ -197,10 +202,40 @@ def find(request):
         break
 
     if found:
+      if dashboard.templated:
+        dashboard.name = dashboard.name + " (templated)"
       results.append( dict(name=dashboard.name) )
 
+  results.sort()
   return json_response( dict(dashboards=results) )
 
+def find_template(request):
+  query = request.REQUEST['query']
+  query_terms = set( query.lower().split() )
+  results = []
+
+  # Find all dashboard names that contain each of our query terms as a substring
+  for dashboard in Dashboard.objects.all():
+    name = dashboard.name.lower()
+    if name.startswith('temporary-'):
+      continue
+    # We only return 'templated' dashboards here
+    if not dashboard.templated:
+      continue
+
+    found = True # blank queries return everything
+    for term in query_terms:
+      if term in name:
+        found = True
+      else:
+        found = False
+        break
+
+    if found:
+      results.append( dict(name=dashboard.name) )
+
+  results.sort()
+  return json_response( dict(templates=results) )
 
 def help(request):
   context = {}
